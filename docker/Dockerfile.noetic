@@ -1,0 +1,53 @@
+FROM osrf/ros:noetic-desktop-full-focal
+
+ARG USERNAME=ubuntu20
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CATKIN_WS=/home/${USERNAME}/DO_CT_LIO_ws
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    sudo \
+    vim \
+    nano \
+    tmux \
+    python3-catkin-tools \
+    python3-rosdep \
+    python3-scipy \
+    python3-tqdm \
+    python3-matplotlib \
+    libopencv-dev \
+    libpcl-dev \
+    libceres-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    libyaml-cpp-dev \
+    libsuitesparse-dev \
+    ros-noetic-pcl-ros \
+    ros-noetic-pcl-conversions \
+    ros-noetic-eigen-conversions \
+    ros-noetic-tf \
+    ros-noetic-tf2-ros \
+    ros-noetic-rviz \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if ! getent group ${USER_GID} >/dev/null; then groupadd --gid ${USER_GID} ${USERNAME}; fi \
+    && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} \
+    && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
+    && chmod 0440 /etc/sudoers.d/${USERNAME}
+
+RUN mkdir -p ${CATKIN_WS}/src \
+    && chown -R ${USER_UID}:${USER_GID} /home/${USERNAME}
+
+USER ${USERNAME}
+WORKDIR ${CATKIN_WS}
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> /home/${USERNAME}/.bashrc \
+    && echo "[ -f ${CATKIN_WS}/devel/setup.bash ] && source ${CATKIN_WS}/devel/setup.bash" >> /home/${USERNAME}/.bashrc \
+    && echo "cd ${CATKIN_WS}" >> /home/${USERNAME}/.bashrc
+
+CMD ["/bin/bash"]

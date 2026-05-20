@@ -1,0 +1,14 @@
+<launch>
+  <arg name="rviz" default="true" />
+  <arg name="trajectory_csv" default="/home/ubuntu20/DO_CT_LIO_ws/downloads/trajectory.csv" />
+
+  <param name="/use_sim_time" value="true" />
+
+  <node pkg="ct_lio" type="ct_lio_eskf" name="ct_lio_eskf" output="screen" required="true">
+    <param name="trajectory_csv" value="$(arg trajectory_csv)" />
+  </node>
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find ct_lio)/launch/rviz.rviz" />
+  </group>
+</launch>

@@ -1,0 +1,27 @@
+# ROS/catkin generated workspaces
+build/
+devel/
+install/
+.catkin_tools/
+
+# Runtime and test artifacts
+log/
+logs/
+src/ct_lio/log/
+downloads/
+*.bag
+*.pcd
+*.csv
+*.log
+*.tmp
+
+# Editor and local machine noise
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python/cache artifacts occasionally produced by tooling
+__pycache__/
+*.pyc
+.pytest_cache/
