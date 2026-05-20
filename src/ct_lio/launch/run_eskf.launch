@@ -1,16 +1,11 @@
 <launch>
   <arg name="project" default="ct_lio"/>
-  <arg name="config_yaml" default="$(find ct_lio)/config/mapping.yaml"/>
-  <arg name="trajectory_csv" default="/tmp/do_ct_lio_trajectory.csv"/>
   <!-- <param name="/use_sim_time" value="true" /> -->
   <arg name="rviz" default="true" />
 
   <!-- subscribe topic from bags -->
   <!-- <node pkg="$(arg project)"  type="$(arg project)_eskf"  name="$(arg project)_eskf"  output="screen" launch-prefix="xterm -e gdb"/> -->
-  <node pkg="$(arg project)" type="$(arg project)_eskf" name="$(arg project)_eskf" output="screen" required="true">
-    <param name="config_yaml" value="$(arg config_yaml)"/>
-    <param name="trajectory_csv" value="$(arg trajectory_csv)"/>
-  </node>
+  <node pkg="$(arg project)" type="$(arg project)_eskf" name="$(arg project)_eskf" output="screen" required="true"/>
 
   <!-- rosbag_io  -->
   <!-- <node pkg="$(arg project)"  type="$(arg project)_eskf_rosbag"  name="$(arg project)_eskf_rosbag"  output="screen" launch-prefix="xterm -e gdb"/> -->

@@ -1,6 +1,6 @@
 <launch>
   <arg name="rviz" default="true" />
-  <arg name="trajectory_csv" default="/home/ubuntu20/DO_CT_LIO_ws/downloads/trajectory.csv" />
+  <arg name="trajectory_csv" default="/home/ubuntu20/CT_LIO_ws/downloads/trajectory.csv" />
 
   <param name="/use_sim_time" value="true" />
 

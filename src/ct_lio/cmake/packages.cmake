@@ -64,7 +64,6 @@ find_package(catkin REQUIRED COMPONENTS
         rospy
         std_msgs
         sensor_msgs
-        livox_ros_driver2
         pcl_ros
         pcl_conversions
         )

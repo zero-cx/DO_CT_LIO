@@ -5,7 +5,7 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CATKIN_WS=/home/${USERNAME}/DO_CT_LIO_ws
+ENV CATKIN_WS=/home/${USERNAME}/CT_LIO_ws
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

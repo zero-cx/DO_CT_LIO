@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME="${IMAGE_NAME:-do-ct-lio-noetic:local}"
-CONTAINER_NAME="${CONTAINER_NAME:-do-ct-lio-noetic}"
-HOST_WS="${HOST_WS:-/home/ubuntu20/DO_CT_LIO_ws}"
+IMAGE_NAME="${IMAGE_NAME:-ct-lio-noetic:local}"
+CONTAINER_NAME="${CONTAINER_NAME:-ct-lio-noetic}"
+HOST_WS="${HOST_WS:-/home/ubuntu20/CT_LIO_ws}"
 CONTAINER_USER="${USER:-ubuntu20}"
-CONTAINER_WS="/home/${CONTAINER_USER}/DO_CT_LIO_ws"
 
 if docker info >/dev/null 2>&1; then
   DOCKER=(docker)
@@ -36,7 +35,7 @@ fi
   -e DISPLAY="${DISPLAY:-:0}" \
   -e QT_X11_NO_MITSHM=1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v "${HOST_WS}:${CONTAINER_WS}:rw" \
-  -w "${CONTAINER_WS}" \
+  -v "${HOST_WS}:/home/${CONTAINER_USER}/CT_LIO_ws:rw" \
+  -w "/home/${CONTAINER_USER}/CT_LIO_ws" \
   "${IMAGE_NAME}" \
   bash

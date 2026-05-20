@@ -66,48 +66,18 @@ struct voxelBlock
 
      bool IsFull() const { return num_points == points.size(); }
 
-     void AddPoint(const Eigen::Vector3d &point, int frame_id = -1)
+     void AddPoint(const Eigen::Vector3d &point)
      {
           assert(num_points > points.size());
           points.push_back(point);
-          Touch(frame_id);
      }
 
      inline int NumPoints() const { return points.size(); }
 
      inline int Capacity() { return num_points; }
 
-     inline int FirstFrameId() const { return first_frame_id; }
-
-     inline int LastFrameId() const { return last_frame_id; }
-
-     inline bool IsStale(int current_frame_id, int max_frame_age) const
-     {
-          return max_frame_age > 0 && last_frame_id >= 0 &&
-                 current_frame_id - last_frame_id > max_frame_age;
-     }
-
-     void ResetWithPoint(const Eigen::Vector3d &point, int frame_id)
-     {
-          points.clear();
-          first_frame_id = -1;
-          last_frame_id = -1;
-          AddPoint(point, frame_id);
-     }
-
-     void Touch(int frame_id)
-     {
-          if (frame_id < 0)
-               return;
-          if (first_frame_id < 0)
-               first_frame_id = frame_id;
-          last_frame_id = frame_id;
-     }
-
 private:
      int num_points;
-     int first_frame_id = -1;
-     int last_frame_id = -1;
 };
 
 typedef tsl::robin_map<voxel, voxelBlock> voxelHashMap;

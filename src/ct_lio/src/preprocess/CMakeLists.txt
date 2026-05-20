@@ -7,4 +7,3 @@ target_link_libraries(${PROJECT_NAME}.pre
         ${third_party_libs}
         )
 
-add_dependencies(${PROJECT_NAME}.pre ${catkin_EXPORTED_TARGETS})

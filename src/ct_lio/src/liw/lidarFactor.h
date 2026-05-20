@@ -17,20 +17,6 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 namespace CT_ICP
 {
-     template <typename T>
-     inline T HeadingFromQuaternion(const Eigen::Quaternion<T> &q_in)
-     {
-          const Eigen::Quaternion<T> q = q_in.normalized();
-          return ceres::atan2(T(2.0) * (q.w() * q.z() + q.x() * q.y()),
-                              T(1.0) - T(2.0) * (q.y() * q.y() + q.z() * q.z()));
-     }
-
-     template <typename T>
-     inline T WrapAngleForResidual(const T &angle)
-     {
-          return ceres::atan2(ceres::sin(angle), ceres::cos(angle));
-     }
-
      struct FunctorPointToPlane
      {
           static constexpr int NumResiduals() { return 1; }
@@ -467,7 +453,6 @@ namespace CT_ICP
                quat_inter.normalize();
 
                Eigen::Matrix<T, 3, 1> raw_keypoint_temp(T(raw_keypoint_(0, 0)), T(raw_keypoint_(1, 0)), T(raw_keypoint_(2, 0)));
-               raw_keypoint_temp = q_il.cast<T>() * raw_keypoint_temp + t_il.cast<T>();
 
                Eigen::Matrix<T, 3, 1> transformed = quat_inter * raw_keypoint_temp;
 
@@ -502,8 +487,6 @@ namespace CT_ICP
           Eigen::Vector3d reference_normal_;
           double alpha_timestamps_;
           double weight_ = 1.0;
-          static Eigen::Vector3d t_il;
-          static Eigen::Quaterniond q_il;
      };
 
      struct LocationConsistencyFunctor
@@ -574,87 +557,6 @@ namespace CT_ICP
           double beta_;
      };
 
-     struct RelativeOrientationFunctor
-     {
-          static constexpr int NumResiduals() { return 3; }
-
-          RelativeOrientationFunctor(const Eigen::Quaterniond &predicted_delta, double beta)
-              : predicted_delta_(predicted_delta.normalized()), beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const begin_q,
-                          const T *const end_q,
-                          T *residual) const
-          {
-               Eigen::Map<const Eigen::Quaternion<T>> quat_begin(begin_q);
-               Eigen::Map<const Eigen::Quaternion<T>> quat_end(end_q);
-               const Eigen::Quaternion<T> estimated_delta =
-                   quat_begin.conjugate() * quat_end;
-               const Eigen::Quaternion<T> predicted_delta(
-                   T(predicted_delta_.w()), T(predicted_delta_.x()),
-                   T(predicted_delta_.y()), T(predicted_delta_.z()));
-
-               Eigen::Quaternion<T> error =
-                   predicted_delta.conjugate() * estimated_delta;
-               if (error.w() < T(0.0))
-                    error.coeffs() *= T(-1.0);
-
-               residual[0] = T(2.0 * beta_) * error.x();
-               residual[1] = T(2.0 * beta_) * error.y();
-               residual[2] = T(2.0 * beta_) * error.z();
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const Eigen::Quaterniond &predicted_delta,
-                                             const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<RelativeOrientationFunctor, 3, 4, 4>(
-                   new RelativeOrientationFunctor(predicted_delta, beta)));
-          }
-
-          EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-     private:
-          Eigen::Quaterniond predicted_delta_;
-          double beta_ = 1.0;
-     };
-
-     struct RelativeYawFunctor
-     {
-          static constexpr int NumResiduals() { return 1; }
-
-          RelativeYawFunctor(double predicted_yaw_delta, double beta)
-              : predicted_yaw_delta_(predicted_yaw_delta), beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const begin_q,
-                          const T *const end_q,
-                          T *residual) const
-          {
-               Eigen::Map<const Eigen::Quaternion<T>> quat_begin(begin_q);
-               Eigen::Map<const Eigen::Quaternion<T>> quat_end(end_q);
-               const Eigen::Quaternion<T> estimated_delta =
-                   quat_begin.conjugate() * quat_end;
-               const T yaw_error =
-                   WrapAngleForResidual(HeadingFromQuaternion(estimated_delta) -
-                                        T(predicted_yaw_delta_));
-
-               residual[0] = T(beta_) * yaw_error;
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const double &predicted_yaw_delta,
-                                             const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<RelativeYawFunctor, 1, 4, 4>(
-                   new RelativeYawFunctor(predicted_yaw_delta, beta)));
-          }
-
-          EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-     private:
-          double predicted_yaw_delta_ = 0.0;
-          double beta_ = 1.0;
-     };
-
      // A Const Functor which enforces a Constant Velocity constraint on translation
      struct ConstantVelocityFunctor
      {
@@ -688,40 +590,6 @@ namespace CT_ICP
           double beta_ = 1.0;
      };
 
-     struct ScanTranslationFunctor
-     {
-          static constexpr int NumResiduals() { return 3; }
-
-          ScanTranslationFunctor(const Eigen::Vector3d &predicted_delta, double beta)
-              : predicted_delta_(predicted_delta), beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const begin_t,
-                          const T *const end_t,
-                          T *residual) const
-          {
-               Eigen::Matrix<T, 3, 1> predicted_delta_temp(
-                   T(predicted_delta_.x()), T(predicted_delta_.y()), T(predicted_delta_.z()));
-
-               residual[0] = T(beta_) * (end_t[0] - begin_t[0] - predicted_delta_temp.x());
-               residual[1] = T(beta_) * (end_t[1] - begin_t[1] - predicted_delta_temp.y());
-               residual[2] = T(beta_) * (end_t[2] - begin_t[2] - predicted_delta_temp.z());
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const Eigen::Vector3d &predicted_delta,
-                                             const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<ScanTranslationFunctor, 3, 3, 3>(
-                   new ScanTranslationFunctor(predicted_delta, beta)));
-          }
-
-          EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-     private:
-          Eigen::Vector3d predicted_delta_;
-          double beta_ = 1.0;
-     };
-
      // A Const Functor which enforces a Small Velocity constraint
      struct SmallVelocityFunctor
      {
@@ -746,179 +614,6 @@ namespace CT_ICP
           }
 
           double beta_;
-     };
-
-     struct NonHolonomicMotionFunctor
-     {
-          static constexpr int NumResiduals() { return 2; }
-
-          explicit NonHolonomicMotionFunctor(double beta) : beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const begin_t,
-                          const T *const begin_q,
-                          const T *const end_t,
-                          T *residual) const
-          {
-               Eigen::Map<const Eigen::Quaternion<T>> quat_begin(begin_q);
-               Eigen::Matrix<T, 3, 1> displacement(end_t[0] - begin_t[0],
-                                                   end_t[1] - begin_t[1],
-                                                   end_t[2] - begin_t[2]);
-               const Eigen::Matrix<T, 3, 1> body_displacement =
-                   quat_begin.conjugate() * displacement;
-
-               residual[0] = T(beta_) * body_displacement.y();
-               residual[1] = T(beta_) * body_displacement.z();
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<NonHolonomicMotionFunctor, 2, 3, 4, 3>(
-                   new NonHolonomicMotionFunctor(beta)));
-          }
-
-          double beta_ = 1.0;
-     };
-
-     struct FrameNonHolonomicFunctor
-     {
-          static constexpr int NumResiduals() { return 2; }
-
-          FrameNonHolonomicFunctor(const Eigen::Vector3d &previous_t,
-                                   const Eigen::Quaterniond &previous_q,
-                                   double beta)
-              : previous_t_(previous_t),
-                previous_q_(previous_q.normalized()),
-                beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const end_t, T *residual) const
-          {
-               const Eigen::Matrix<T, 3, 1> previous_t_temp(
-                   T(previous_t_.x()), T(previous_t_.y()), T(previous_t_.z()));
-               const Eigen::Quaternion<T> previous_q_temp(
-                   T(previous_q_.w()), T(previous_q_.x()),
-                   T(previous_q_.y()), T(previous_q_.z()));
-               const Eigen::Matrix<T, 3, 1> displacement(
-                   end_t[0] - previous_t_temp.x(),
-                   end_t[1] - previous_t_temp.y(),
-                   end_t[2] - previous_t_temp.z());
-               const Eigen::Matrix<T, 3, 1> body_displacement =
-                   previous_q_temp.conjugate() * displacement;
-
-               residual[0] = T(beta_) * body_displacement.y();
-               residual[1] = T(beta_) * body_displacement.z();
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const Eigen::Vector3d &previous_t,
-                                             const Eigen::Quaterniond &previous_q,
-                                             const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<FrameNonHolonomicFunctor, 2, 3>(
-                   new FrameNonHolonomicFunctor(previous_t, previous_q, beta)));
-          }
-
-          EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-     private:
-          Eigen::Vector3d previous_t_;
-          Eigen::Quaterniond previous_q_;
-          double beta_ = 1.0;
-     };
-
-     struct WorldZConsistencyFunctor
-     {
-          static constexpr int NumResiduals() { return 1; }
-
-          WorldZConsistencyFunctor(double reference_z, double beta)
-              : reference_z_(reference_z), beta_(beta) {}
-
-          template <typename T>
-          bool operator()(const T *const end_t, T *residual) const
-          {
-               residual[0] = T(beta_) * (end_t[2] - T(reference_z_));
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const double &reference_z,
-                                             const double &beta)
-          {
-               return (new ceres::AutoDiffCostFunction<WorldZConsistencyFunctor, 1, 3>(
-                   new WorldZConsistencyFunctor(reference_z, beta)));
-          }
-
-     private:
-          double reference_z_ = 0.0;
-          double beta_ = 1.0;
-     };
-
-     struct CommandMotionFunctor
-     {
-          static constexpr int NumResiduals() { return 3; }
-
-          CommandMotionFunctor(double commanded_forward,
-                               double commanded_yaw,
-                               double beta_forward,
-                               double beta_lateral,
-                               double beta_yaw)
-              : commanded_forward_(commanded_forward),
-                commanded_yaw_(commanded_yaw),
-                beta_forward_(beta_forward),
-                beta_lateral_(beta_lateral),
-                beta_yaw_(beta_yaw) {}
-
-          template <typename T>
-          bool operator()(const T *const begin_t,
-                          const T *const begin_q,
-                          const T *const end_t,
-                          const T *const end_q,
-                          T *residual) const
-          {
-               Eigen::Map<const Eigen::Quaternion<T>> quat_begin(begin_q);
-               Eigen::Map<const Eigen::Quaternion<T>> quat_end(end_q);
-               const Eigen::Quaternion<T> quat_begin_value(quat_begin);
-               const Eigen::Quaternion<T> quat_end_value(quat_end);
-               const T heading_begin = HeadingFromQuaternion(quat_begin_value);
-               const T displacement_x = end_t[0] - begin_t[0];
-               const T displacement_y = end_t[1] - begin_t[1];
-               const T cos_heading = ceres::cos(heading_begin);
-               const T sin_heading = ceres::sin(heading_begin);
-               const T forward_displacement =
-                   cos_heading * displacement_x + sin_heading * displacement_y;
-               const T lateral_displacement =
-                   -sin_heading * displacement_x + cos_heading * displacement_y;
-               const T yaw_error =
-                   WrapAngleForResidual(HeadingFromQuaternion(quat_end_value) - heading_begin -
-                                        T(commanded_yaw_));
-
-               residual[0] = T(beta_forward_) * (forward_displacement - T(commanded_forward_));
-               residual[1] = T(beta_lateral_) * lateral_displacement;
-               residual[2] = T(beta_yaw_) * yaw_error;
-               return true;
-          }
-
-          static ceres::CostFunction *Create(const double &commanded_forward,
-                                             const double &commanded_yaw,
-                                             const double &beta_forward,
-                                             const double &beta_lateral,
-                                             const double &beta_yaw)
-          {
-               return (new ceres::AutoDiffCostFunction<CommandMotionFunctor, 3, 3, 4, 3, 4>(
-                   new CommandMotionFunctor(commanded_forward,
-                                            commanded_yaw,
-                                            beta_forward,
-                                            beta_lateral,
-                                            beta_yaw)));
-          }
-
-          EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-     private:
-          double commanded_forward_ = 0.0;
-          double commanded_yaw_ = 0.0;
-          double beta_forward_ = 0.0;
-          double beta_lateral_ = 0.0;
-          double beta_yaw_ = 0.0;
      };
 
      class TruncatedLoss : public ceres::LossFunction

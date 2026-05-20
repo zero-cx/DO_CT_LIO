@@ -3,16 +3,12 @@ YAML: 1.0
 preprocess:
   point_filter_num: 1
   lidar_type: 2  # 1-AVIA 2-velodyne 3-ouster  4-robosense 5-pandar
-  # Gazebo Velodyne messages stamp the completed scan; point time fields are
-  # offsets within that scan and must be referenced to stamp - scan_span.
-  lidar_header_stamp_is_end: true
   blind: 0.1
 
 
 common:
   imu_topic: /imu/data_raw
   lid_topic: /velodyne_points  #/points_raw  /rslidar_points /velodyne_points
-  cmd_vel_topic: /cmd_vel
 
 mapping:
   extrinsic_est_en: false
@@ -22,20 +18,6 @@ mapping:
   extrinsic_R: [ 1, 0, 0,  0, 1, 0,  0, 0, 1]
 
 delay_time: 0.0
-
-output:
-  # Gazebo /ground_truth/odom reports the Scout model/base_link height in the
-  # world frame. From the URDF, base height above the ground is
-  # wheel_radius - wheel_vertical_offset = 0.16459 - (-0.07020) = 0.23479 m.
-  translation_offset: [0.0, 0.0, 0.23479]
-  # Fixed Gazebo map/base output calibration for the Scout validation family.
-  # This is applied uniformly to both validation bags and is not recomputed at
-  # runtime from ground truth.
-  world_translation_offset: [-0.03848, -0.00365, 0.23700]
-  # Body-frame correction is rotated by the estimated pose before publication.
-  # It compensates the published base_link reference point instead of applying
-  # a fixed world-frame x/y shift.
-  body_translation_offset: [0.025, -0.010, 0.0]
 
 imu_initialization:
   # Gazebo raw IMU has quantization/contact jitter that is larger than the
@@ -56,8 +38,7 @@ odometry:
   size_voxel_map: 0.2                         # The voxel size of in the voxel map
   min_distance_points: 0.05
   max_num_points_in_voxel: 20                 # The maximum number of points per voxel of the map
-  max_distance: 10.0                         # Local map radius; prevents long-history associations in repeated corridors
-  map_max_frame_age: 220                     # Refresh stale voxel blocks after ~22 s at the Gazebo scan rate; 0 disables
+  max_distance: 500.0                        # The threshold of the distance to suppress voxels from the map
   weight_alpha: 0.9
   weight_neighborhood: 0.1
   max_dist_to_plane_icp: 0.3
@@ -72,69 +53,13 @@ odometry:
 
   sampling_rate: 1.
   ratio_of_nonground: 2
-  max_num_residuals: 1000
+  max_num_residuals: 2000
   min_num_residuals: 120
-  motion_compensation: CONTINUOUS #NONE, CONSTANT_VELOCITY, ITERATIVE, CONTINUOUS
-  beta_location_consistency: 10.0
-  beta_orientation_consistency: 10.0
-  beta_constant_velocity: 1.0
-  beta_scan_translation: 0.0
+  motion_compensation: CONSTANT_VELOCITY #NONE, CONSTANT_VELOCITY, ITERATIVE, CONTINUOUS
+  beta_location_consistency: 1.0
+  beta_orientation_consistency: 1.0
+  beta_constant_velocity: 0.0
   beta_small_velocity: 0.0
-  beta_relative_orientation: 0.0
-  beta_relative_yaw: 0.5
-  beta_nonholonomic: 2.0
-  beta_frame_nonholonomic: 100.0
-  beta_world_z_consistency: 50.0
-  beta_world_z_reference: 100.0
-  beta_command_translation: 1.0
-  beta_command_lateral: 1.0
-  beta_command_yaw: 0.0
-  command_motion_max_gap: 0.25
-  command_motion_min_samples: 2
 
   thres_translation_norm: 0.01            # m
   thres_orientation_norm: 0.1             # deg
-
-do_ct_lio:
-  hessian_12d:
-    enabled: true
-    logging_only: true
-    # Initial diagnostic minimum only. Tune from observed eigenvalue spectra.
-    effective_rank_threshold: 8
-    relative_eigen_floor: 1.0e-6
-    rotation_scale_meters: 1.0
-    log_every_n_frames: 50
-    log_first_iteration_only: true
-    finite_difference_enabled: true
-    finite_difference_max_columns: 12
-    finite_difference_epsilon: 1.0e-5
-    log_path: /home/ubuntu20/DO_CT_LIO_ws/src/ct_lio/log/do_ct_hessian_diagnostics.csv
-  degeneracy_aware:
-    enable: true
-    diagnostic_6d: false
-    log_diagnostics: true
-    jacobian_check: true
-    lambda0: 0.08
-    gamma: 0.7
-    omega_min: 0.15
-    omega_max: 1.5
-    rotation_scale_mode: adaptive
-    rotation_scale: 8.0
-    rotation_scale_min: 2.0
-    rotation_scale_max: 20.0
-    bucket_size: 0.8
-    bucket_top_k: 6
-    time_bucket_count: 4
-    min_candidates: 120
-    max_candidate_multiplier: 3
-    degeneracy_threshold: 0.05
-    # Initial value only; final threshold must be tuned from logged spectra.
-    effective_rank_threshold: 8
-    prior_boost: 2.0
-    prior_boost_max: 4.0
-    max_weight_delta: 0.2
-    jacobian_norm_min: 1.0e-8
-    post_solve_projection: false
-    projection_strength: 0.2
-    projection_min_gate_threshold: 0.12
-    log_path: /home/ubuntu20/DO_CT_LIO_ws/src/ct_lio/log/do_ct_degeneracy_weights.csv

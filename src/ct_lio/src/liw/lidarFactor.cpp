@@ -9,8 +9,6 @@ namespace CT_ICP
      double CTLidarPlaneNormFactor::sqrt_info;
      Eigen::Vector3d CTLidarPlaneNormFactor::t_il;
      Eigen::Quaterniond CTLidarPlaneNormFactor::q_il;
-     Eigen::Vector3d CTPointToPlaneFunctor::t_il = Eigen::Vector3d::Zero();
-     Eigen::Quaterniond CTPointToPlaneFunctor::q_il = Eigen::Quaterniond::Identity();
 
      LidarPlaneNormFactor::LidarPlaneNormFactor(const Eigen::Vector3d &point_body_, const Eigen::Vector3d &norm_vector_, const double norm_offset_, double weight_)
          : point_body(point_body_), norm_vector(norm_vector_), norm_offset(norm_offset_), weight(weight_)

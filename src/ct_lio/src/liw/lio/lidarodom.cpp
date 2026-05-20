@@ -1,106 +1,9 @@
 #include <yaml-cpp/yaml.h>
 #include "lidarodom.h"
 
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <iomanip>
-#include <limits>
-#include <map>
-#include <numeric>
-#include <set>
-#include <sstream>
-
 namespace zjloc
 {
 #define USE_ANALYTICAL_DERIVATE 1 //    是否使用解析求导
-
-     namespace
-     {
-          Eigen::MatrixXd denseFromCrs(const ceres::CRSMatrix &crs)
-          {
-               Eigen::MatrixXd dense = Eigen::MatrixXd::Zero(crs.num_rows, crs.num_cols);
-               for (int row = 0; row < crs.num_rows; ++row)
-               {
-                    for (int idx = crs.rows[row]; idx < crs.rows[row + 1]; ++idx)
-                    {
-                         dense(row, crs.cols[idx]) = crs.values[idx];
-                    }
-               }
-               return dense;
-          }
-
-          std::array<std::vector<double>, 4> backupParameterBlocks(const std::vector<double *> &blocks)
-          {
-               return {std::vector<double>(blocks[0], blocks[0] + 3),
-                       std::vector<double>(blocks[1], blocks[1] + 4),
-                       std::vector<double>(blocks[2], blocks[2] + 3),
-                       std::vector<double>(blocks[3], blocks[3] + 4)};
-          }
-
-          void restoreParameterBlocks(const std::vector<double *> &blocks,
-                                      const std::array<std::vector<double>, 4> &backup)
-          {
-               std::copy(backup[0].begin(), backup[0].end(), blocks[0]);
-               std::copy(backup[1].begin(), backup[1].end(), blocks[1]);
-               std::copy(backup[2].begin(), backup[2].end(), blocks[2]);
-               std::copy(backup[3].begin(), backup[3].end(), blocks[3]);
-          }
-
-          void applyLocalPerturbation(const std::vector<double *> &blocks, int column, double step)
-          {
-               if (column < 3)
-               {
-                    blocks[0][column] += step;
-                    return;
-               }
-               if (column < 6)
-               {
-                    Eigen::Map<Eigen::Quaterniond> q_begin(blocks[1]);
-                    Eigen::Vector3d delta = Eigen::Vector3d::Zero();
-                    delta(column - 3) = step;
-                    q_begin = (q_begin * numType::deltaQ(delta)).normalized();
-                    return;
-               }
-               if (column < 9)
-               {
-                    blocks[2][column - 6] += step;
-                    return;
-               }
-
-               Eigen::Map<Eigen::Quaterniond> q_end(blocks[3]);
-               Eigen::Vector3d delta = Eigen::Vector3d::Zero();
-               delta(column - 9) = step;
-               q_end = (q_end * numType::deltaQ(delta)).normalized();
-          }
-
-          Eigen::Vector3d localRotationDelta(const Eigen::Quaterniond &before,
-                                             const Eigen::Quaterniond &after)
-          {
-               Eigen::Quaterniond delta = before.normalized().conjugate() * after.normalized();
-               if (delta.w() < 0.0)
-                    delta.coeffs() *= -1.0;
-
-               const double safe_w =
-                   std::abs(delta.w()) > 1.0e-12 ? delta.w() : (delta.w() < 0.0 ? -1.0e-12 : 1.0e-12);
-               return 2.0 * delta.vec() / safe_w;
-          }
-
-          Eigen::Quaterniond applyLocalRotationDelta(const Eigen::Quaterniond &before,
-                                                     const Eigen::Vector3d &delta)
-          {
-               return (before.normalized() * numType::deltaQ(delta)).normalized();
-          }
-
-          double yawFromQuaternion(const Eigen::Quaterniond &q)
-          {
-               const Eigen::Quaterniond normalized = q.normalized();
-               return std::atan2(2.0 * (normalized.w() * normalized.z() +
-                                        normalized.x() * normalized.y()),
-                                 1.0 - 2.0 * (normalized.y() * normalized.y() +
-                                              normalized.z() * normalized.z()));
-          }
-     }
 
      lidarodom::lidarodom(/* args */)
      {
@@ -130,8 +33,6 @@ namespace zjloc
           options_.min_distance_points = yaml["odometry"]["min_distance_points"].as<double>();
           options_.max_num_points_in_voxel = yaml["odometry"]["max_num_points_in_voxel"].as<int>();
           options_.max_distance = yaml["odometry"]["max_distance"].as<double>();
-          if (yaml["odometry"]["map_max_frame_age"])
-               options_.map_max_frame_age = yaml["odometry"]["map_max_frame_age"].as<int>();
           options_.weight_alpha = yaml["odometry"]["weight_alpha"].as<double>();
           options_.weight_neighborhood = yaml["odometry"]["weight_neighborhood"].as<double>();
           options_.max_dist_to_plane_icp = yaml["odometry"]["max_dist_to_plane_icp"].as<double>();
@@ -147,7 +48,6 @@ namespace zjloc
           options_.sampling_rate = yaml["odometry"]["sampling_rate"].as<double>();
           options_.ratio_of_nonground = yaml["odometry"]["ratio_of_nonground"].as<double>();
           options_.max_num_residuals = yaml["odometry"]["max_num_residuals"].as<int>();
-          options_.min_num_residuals = yaml["odometry"]["min_num_residuals"].as<int>();
           std::string str_motion_compensation = yaml["odometry"]["motion_compensation"].as<std::string>();
           if (str_motion_compensation == "NONE")
                options_.motion_compensation = MotionCompensation::NONE;
@@ -171,130 +71,9 @@ namespace zjloc
           options_.beta_location_consistency = yaml["odometry"]["beta_location_consistency"].as<double>();
           options_.beta_orientation_consistency = yaml["odometry"]["beta_orientation_consistency"].as<double>();
           options_.beta_constant_velocity = yaml["odometry"]["beta_constant_velocity"].as<double>();
-          if (yaml["odometry"]["beta_scan_translation"])
-               options_.beta_scan_translation = yaml["odometry"]["beta_scan_translation"].as<double>();
           options_.beta_small_velocity = yaml["odometry"]["beta_small_velocity"].as<double>();
-          if (yaml["odometry"]["beta_relative_orientation"])
-               options_.beta_relative_orientation = yaml["odometry"]["beta_relative_orientation"].as<double>();
-          if (yaml["odometry"]["beta_relative_yaw"])
-               options_.beta_relative_yaw = yaml["odometry"]["beta_relative_yaw"].as<double>();
-          if (yaml["odometry"]["beta_nonholonomic"])
-               options_.beta_nonholonomic = yaml["odometry"]["beta_nonholonomic"].as<double>();
-          if (yaml["odometry"]["beta_frame_nonholonomic"])
-               options_.beta_frame_nonholonomic = yaml["odometry"]["beta_frame_nonholonomic"].as<double>();
-          if (yaml["odometry"]["beta_world_z_consistency"])
-               options_.beta_world_z_consistency = yaml["odometry"]["beta_world_z_consistency"].as<double>();
-          if (yaml["odometry"]["beta_world_z_reference"])
-               options_.beta_world_z_reference = yaml["odometry"]["beta_world_z_reference"].as<double>();
-          if (yaml["odometry"]["beta_command_translation"])
-               options_.beta_command_translation = yaml["odometry"]["beta_command_translation"].as<double>();
-          if (yaml["odometry"]["beta_command_lateral"])
-               options_.beta_command_lateral = yaml["odometry"]["beta_command_lateral"].as<double>();
-          if (yaml["odometry"]["beta_command_yaw"])
-               options_.beta_command_yaw = yaml["odometry"]["beta_command_yaw"].as<double>();
-          if (yaml["odometry"]["command_motion_max_gap"])
-               options_.command_motion_max_gap = yaml["odometry"]["command_motion_max_gap"].as<double>();
-          if (yaml["odometry"]["command_motion_min_samples"])
-               options_.command_motion_min_samples = yaml["odometry"]["command_motion_min_samples"].as<int>();
           options_.thres_orientation_norm = yaml["odometry"]["thres_orientation_norm"].as<double>();
           options_.thres_translation_norm = yaml["odometry"]["thres_translation_norm"].as<double>();
-
-          if (yaml["do_ct_lio"] && yaml["do_ct_lio"]["hessian_12d"])
-          {
-               const auto do_ct = yaml["do_ct_lio"]["hessian_12d"];
-               if (do_ct["enabled"])
-                    options_.do_ct_diagnostics.enabled = do_ct["enabled"].as<bool>();
-               if (do_ct["logging_only"])
-                    options_.do_ct_diagnostics.logging_only = do_ct["logging_only"].as<bool>();
-               if (do_ct["finite_difference_enabled"])
-                    options_.do_ct_diagnostics.finite_difference_enabled = do_ct["finite_difference_enabled"].as<bool>();
-               if (do_ct["log_first_iteration_only"])
-                    options_.do_ct_diagnostics.log_first_iteration_only = do_ct["log_first_iteration_only"].as<bool>();
-               if (do_ct["log_every_n_frames"])
-                    options_.do_ct_diagnostics.log_every_n_frames = do_ct["log_every_n_frames"].as<int>();
-               if (do_ct["finite_difference_max_columns"])
-                    options_.do_ct_diagnostics.finite_difference_max_columns = do_ct["finite_difference_max_columns"].as<int>();
-               if (do_ct["effective_rank_threshold"])
-                    options_.do_ct_diagnostics.effective_rank_threshold = do_ct["effective_rank_threshold"].as<int>();
-               if (do_ct["relative_eigen_floor"])
-                    options_.do_ct_diagnostics.relative_eigen_floor = do_ct["relative_eigen_floor"].as<double>();
-               if (do_ct["rotation_scale_meters"])
-                    options_.do_ct_diagnostics.rotation_scale_meters = do_ct["rotation_scale_meters"].as<double>();
-               if (do_ct["finite_difference_epsilon"])
-                    options_.do_ct_diagnostics.finite_difference_epsilon = do_ct["finite_difference_epsilon"].as<double>();
-               if (do_ct["log_path"])
-                    options_.do_ct_diagnostics.log_path = do_ct["log_path"].as<std::string>();
-          }
-
-          if (yaml["do_ct_lio"] && yaml["do_ct_lio"]["degeneracy_aware"])
-          {
-               const auto da = yaml["do_ct_lio"]["degeneracy_aware"];
-               if (da["enable"])
-                    options_.degeneracy_aware.enable = da["enable"].as<bool>();
-               if (da["diagnostic_6d"])
-                    options_.degeneracy_aware.diagnostic_6d = da["diagnostic_6d"].as<bool>();
-               if (da["log_diagnostics"])
-                    options_.degeneracy_aware.log_diagnostics = da["log_diagnostics"].as<bool>();
-               if (da["jacobian_check"])
-                    options_.degeneracy_aware.jacobian_check = da["jacobian_check"].as<bool>();
-               if (da["lambda0"])
-                    options_.degeneracy_aware.lambda0 = da["lambda0"].as<double>();
-               if (da["gamma"])
-                    options_.degeneracy_aware.gamma = da["gamma"].as<double>();
-               if (da["omega_min"])
-                    options_.degeneracy_aware.omega_min = da["omega_min"].as<double>();
-               if (da["omega_max"])
-                    options_.degeneracy_aware.omega_max = da["omega_max"].as<double>();
-               if (da["rotation_scale_mode"])
-                    options_.degeneracy_aware.rotation_scale_mode = da["rotation_scale_mode"].as<std::string>();
-               if (da["rotation_scale"])
-                    options_.degeneracy_aware.rotation_scale = da["rotation_scale"].as<double>();
-               if (da["rotation_scale_min"])
-                    options_.degeneracy_aware.rotation_scale_min = da["rotation_scale_min"].as<double>();
-               if (da["rotation_scale_max"])
-                    options_.degeneracy_aware.rotation_scale_max = da["rotation_scale_max"].as<double>();
-               if (da["bucket_size"])
-                    options_.degeneracy_aware.bucket_size = da["bucket_size"].as<double>();
-               if (da["bucket_top_k"])
-                    options_.degeneracy_aware.bucket_top_k = da["bucket_top_k"].as<int>();
-               if (da["time_bucket_count"])
-                    options_.degeneracy_aware.time_bucket_count = da["time_bucket_count"].as<int>();
-               if (da["min_candidates"])
-                    options_.degeneracy_aware.min_candidates = da["min_candidates"].as<int>();
-               if (da["max_candidate_multiplier"])
-                    options_.degeneracy_aware.max_candidate_multiplier = da["max_candidate_multiplier"].as<int>();
-               if (da["degeneracy_threshold"])
-                    options_.degeneracy_aware.degeneracy_threshold = da["degeneracy_threshold"].as<double>();
-               if (da["effective_rank_threshold"])
-                    options_.degeneracy_aware.effective_rank_threshold = da["effective_rank_threshold"].as<int>();
-               if (da["prior_boost"])
-                    options_.degeneracy_aware.prior_boost = da["prior_boost"].as<double>();
-               if (da["prior_boost_max"])
-                    options_.degeneracy_aware.prior_boost_max = da["prior_boost_max"].as<double>();
-               if (da["max_weight_delta"])
-                    options_.degeneracy_aware.max_weight_delta = da["max_weight_delta"].as<double>();
-               if (da["jacobian_norm_min"])
-                    options_.degeneracy_aware.jacobian_norm_min = da["jacobian_norm_min"].as<double>();
-               if (da["post_solve_projection"])
-                    options_.degeneracy_aware.post_solve_projection = da["post_solve_projection"].as<bool>();
-               if (da["projection_strength"])
-                    options_.degeneracy_aware.projection_strength = da["projection_strength"].as<double>();
-               if (da["projection_min_gate_threshold"])
-                    options_.degeneracy_aware.projection_min_gate_threshold = da["projection_min_gate_threshold"].as<double>();
-               if (da["log_path"])
-                    options_.degeneracy_aware.log_path = da["log_path"].as<std::string>();
-          }
-
-          if (options_.do_ct_diagnostics.log_path.empty())
-          {
-               options_.do_ct_diagnostics.log_path =
-                   std::string(ROOT_DIR) + "log/do_ct_hessian_diagnostics.csv";
-          }
-          if (options_.degeneracy_aware.log_path.empty())
-          {
-               options_.degeneracy_aware.log_path =
-                   std::string(ROOT_DIR) + "log/do_ct_degeneracy_weights.csv";
-          }
      }
 
      bool lidarodom::init(const std::string &config_yaml)
@@ -343,8 +122,6 @@ namespace zjloc
           CT_ICP::LidarPlaneNormFactor::q_il = TIL_.rotationMatrix();
           CT_ICP::CTLidarPlaneNormFactor::t_il = t_imu_lidar;
           CT_ICP::CTLidarPlaneNormFactor::q_il = TIL_.rotationMatrix();
-          CT_ICP::CTPointToPlaneFunctor::t_il = t_imu_lidar;
-          CT_ICP::CTPointToPlaneFunctor::q_il = TIL_.rotationMatrix();
 
           loadOptions();
           switch (options_.motion_compensation)
@@ -399,54 +176,6 @@ namespace zjloc
           imu_buffer_.emplace_back(imu);
           mtx_buf.unlock();
           cond.notify_one();
-     }
-
-     void lidarodom::pushCmdVel(double stamp, double linear_x, double angular_z)
-     {
-          if (!std::isfinite(stamp) ||
-              !std::isfinite(linear_x) ||
-              !std::isfinite(angular_z) ||
-              stamp <= 0.0)
-          {
-               return;
-          }
-
-          std::lock_guard<std::mutex> lock(mtx_cmd);
-          if (!cmd_velocity_buffer_.empty() &&
-              stamp < cmd_velocity_buffer_.back().stamp)
-          {
-               cmd_velocity_buffer_.clear();
-          }
-
-          cmd_velocity_buffer_.push_back({stamp, linear_x, angular_z});
-          const double prune_before =
-              stamp - std::max(5.0, 4.0 * options_.command_motion_max_gap);
-          while (!cmd_velocity_buffer_.empty() &&
-                 cmd_velocity_buffer_.front().stamp < prune_before)
-          {
-               cmd_velocity_buffer_.pop_front();
-          }
-     }
-
-     do_ct_lio::CommandMotionDelta lidarodom::commandMotionDelta(double begin_time,
-                                                                 double end_time)
-     {
-          std::vector<do_ct_lio::CommandMotionSample> samples;
-          {
-               std::lock_guard<std::mutex> lock(mtx_cmd);
-               samples.reserve(cmd_velocity_buffer_.size());
-               const double min_time = begin_time - options_.command_motion_max_gap;
-               for (const auto &sample : cmd_velocity_buffer_)
-               {
-                    if (sample.stamp >= min_time && sample.stamp <= end_time)
-                         samples.push_back(sample);
-               }
-          }
-
-          return do_ct_lio::IntegrateCommandMotion(samples,
-                                                   begin_time,
-                                                   end_time,
-                                                   options_.command_motion_max_gap);
      }
 
      void lidarodom::run()
@@ -604,17 +333,6 @@ namespace zjloc
           Eigen::Quaterniond end_quat = Eigen::Quaterniond(curr_state->rotation);
           Eigen::Vector3d begin_t = curr_state->translation_begin;
           Eigen::Vector3d end_t = curr_state->translation;
-          const Eigen::Quaterniond predicted_scan_delta =
-              begin_quat.normalized().conjugate() * end_quat.normalized();
-          const Eigen::Vector3d predicted_scan_translation_delta = end_t - begin_t;
-          const bool command_motion_enabled =
-              options_.beta_command_translation > 0.0 ||
-              options_.beta_command_lateral > 0.0 ||
-              options_.beta_command_yaw > 0.0;
-          const do_ct_lio::CommandMotionDelta command_delta =
-              command_motion_enabled
-                  ? commandMotionDelta(p_frame->time_frame_begin, p_frame->time_frame_end)
-                  : do_ct_lio::CommandMotionDelta();
 
           if (p_frame->frame_id > 1)
           {
@@ -694,29 +412,7 @@ namespace zjloc
 
                std::vector<ceres::CostFunction *> surfFactor;
                std::vector<Eigen::Vector3d> normalVec;
-               std::vector<DoCtPlaneResidual> do_ct_plane_residuals;
-               const bool degeneracy_aware_enabled =
-                   options_.degeneracy_aware.enable &&
-                   options_.icpmodel == IcpModel::CT_POINT_TO_PLANE;
-               const bool collect_do_ct_candidates =
-                   degeneracy_aware_enabled || options_.do_ct_diagnostics.enabled;
-               addSurfCostFactor(surfFactor, normalVec, surf_keypoints, p_frame,
-                                 collect_do_ct_candidates ? &do_ct_plane_residuals : nullptr,
-                                 degeneracy_aware_enabled);
-
-               double degeneracy_prior_boost = 1.0;
-               if (degeneracy_aware_enabled)
-               {
-                    degeneracy_prior_boost =
-                        applyDegeneracyAwareResiduals(surfFactor,
-                                                       do_ct_plane_residuals,
-                                                       begin_t,
-                                                       begin_quat,
-                                                       end_t,
-                                                       end_quat,
-                                                       p_frame->frame_id,
-                                                       iter);
-               }
+               addSurfCostFactor(surfFactor, normalVec, surf_keypoints, p_frame);
 
                //   TODO: 退化后，该如何处理
                checkLocalizability(normalVec);
@@ -739,233 +435,54 @@ namespace zjloc
                     // if (surf_num > options_.max_num_residuals)
                     //      break;
                }
-
-               const auto &do_ct = options_.do_ct_diagnostics;
-               const bool should_log_do_ct =
-                   do_ct_lio::ShouldLogDoCtHessianDiagnostics(do_ct.enabled,
-                                                              do_ct.logging_only,
-                                                              do_ct.log_first_iteration_only,
-                                                              p_frame->frame_id,
-                                                              iter,
-                                                              do_ct.log_every_n_frames,
-                                                              !do_ct_plane_residuals.empty());
-
-               if (should_log_do_ct)
-               {
-                    ceres::Problem diagnostic_problem;
-                    diagnostic_problem.AddParameterBlock(&begin_quat.x(), 4, new RotationParameterization());
-                    diagnostic_problem.AddParameterBlock(&end_quat.x(), 4, new RotationParameterization());
-                    diagnostic_problem.AddParameterBlock(&begin_t.x(), 3);
-                    diagnostic_problem.AddParameterBlock(&end_t.x(), 3);
-
-                    for (const auto &residual : do_ct_plane_residuals)
-                    {
-                         auto *cost_function =
-                             new CT_ICP::CTLidarPlaneNormFactor(residual.raw_point,
-                                                                residual.normal,
-                                                                residual.norm_offset,
-                                                                residual.alpha_time,
-                                                                residual.local_factor_weight);
-                         diagnostic_problem.AddResidualBlock(cost_function, nullptr,
-                                                             &begin_t.x(), &begin_quat.x(),
-                                                             &end_t.x(), &end_quat.x());
-                    }
-
-                    std::vector<double *> do_ct_parameter_blocks = {
-                        &begin_t.x(), &begin_quat.x(), &end_t.x(), &end_quat.x()};
-                    logDoCtHessianDiagnostics(diagnostic_problem,
-                                             do_ct_parameter_blocks,
-                                             p_frame->frame_id,
-                                             iter,
-                                             surf_num);
-               }
-
                //   release
                std::vector<Eigen::Vector3d>().swap(normalVec);
                std::vector<ceres::CostFunction *>().swap(surfFactor);
-               std::vector<DoCtPlaneResidual>().swap(do_ct_plane_residuals);
 
                if (options_.icpmodel == IcpModel::CT_POINT_TO_PLANE)
                {
                     if (options_.beta_location_consistency > 0.) //   location consistency
                     {
-                         const double beta_location =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_location_consistency *
-                                                                  degeneracy_prior_boost);
 #ifdef USE_ANALYTICAL_DERIVATE
                          CT_ICP::LocationConsistencyFactor *cost_location_consistency =
-                             new CT_ICP::LocationConsistencyFactor(previous_translation, beta_location * std::sqrt(laser_point_cov));
+                             new CT_ICP::LocationConsistencyFactor(previous_translation, sqrt(surf_num * options_.beta_location_consistency * laser_point_cov));
 #else
                          auto *cost_location_consistency =
-                             CT_ICP::LocationConsistencyFunctor::Create(previous_translation, beta_location);
+                             CT_ICP::LocationConsistencyFunctor::Create(previous_translation, sqrt(surf_num * options_.beta_location_consistency));
 #endif
                          problem.AddResidualBlock(cost_location_consistency, nullptr, &begin_t.x());
                     }
 
                     if (options_.beta_orientation_consistency > 0.) // orientation consistency
                     {
-                         const double beta_orientation =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_orientation_consistency *
-                                                                  degeneracy_prior_boost);
 #ifdef USE_ANALYTICAL_DERIVATE
                          CT_ICP::RotationConsistencyFactor *cost_rotation_consistency =
-                             new CT_ICP::RotationConsistencyFactor(previous_orientation, beta_orientation * std::sqrt(laser_point_cov));
+                             new CT_ICP::RotationConsistencyFactor(previous_orientation, sqrt(surf_num * options_.beta_orientation_consistency * laser_point_cov));
 #else
                          auto *cost_rotation_consistency =
-                             CT_ICP::OrientationConsistencyFunctor::Create(previous_orientation, beta_orientation);
+                             CT_ICP::OrientationConsistencyFunctor::Create(previous_orientation, sqrt(surf_num * options_.beta_orientation_consistency));
 #endif
                          problem.AddResidualBlock(cost_rotation_consistency, nullptr, &begin_quat.x());
                     }
 
                     if (options_.beta_small_velocity > 0.) //     small velocity
                     {
-                         const double beta_small_velocity =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_small_velocity *
-                                                                  degeneracy_prior_boost);
 #ifdef USE_ANALYTICAL_DERIVATE
                          CT_ICP::SmallVelocityFactor *cost_small_velocity =
-                             new CT_ICP::SmallVelocityFactor(beta_small_velocity * std::sqrt(laser_point_cov));
+                             new CT_ICP::SmallVelocityFactor(sqrt(surf_num * options_.beta_small_velocity * laser_point_cov));
 #else
                          auto *cost_small_velocity =
-                             CT_ICP::SmallVelocityFunctor::Create(beta_small_velocity);
+                             CT_ICP::SmallVelocityFunctor::Create(sqrt(surf_num * options_.beta_small_velocity));
 #endif
                          problem.AddResidualBlock(cost_small_velocity, nullptr, &begin_t.x(), &end_t.x());
                     }
 
-                    if (options_.beta_constant_velocity > 0.) // const translation velocity
-                    {
-                         const double beta_constant_velocity =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_constant_velocity *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_velocity_consistency =
-                             CT_ICP::ConstantVelocityFunctor::Create(previous_velocity, beta_constant_velocity);
-                         problem.AddResidualBlock(cost_velocity_consistency, nullptr, &begin_t.x(), &end_t.x());
-                    }
-
-                    if (options_.beta_scan_translation > 0.) // scan translation from IMU prediction
-                    {
-                         const double beta_scan_translation =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_scan_translation *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_scan_translation =
-                             CT_ICP::ScanTranslationFunctor::Create(predicted_scan_translation_delta,
-                                                                    beta_scan_translation);
-                         problem.AddResidualBlock(cost_scan_translation, nullptr,
-                                                  &begin_t.x(), &end_t.x());
-                    }
-
-                    if (options_.beta_relative_orientation > 0.) // scan relative rotation from IMU prediction
-                    {
-                         const double beta_relative_orientation =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_relative_orientation *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_relative_orientation =
-                             CT_ICP::RelativeOrientationFunctor::Create(predicted_scan_delta,
-                                                                       beta_relative_orientation);
-                         problem.AddResidualBlock(cost_relative_orientation, nullptr,
-                                                  &begin_quat.x(), &end_quat.x());
-                    }
-
-                    if (options_.beta_relative_yaw > 0.) // scan relative yaw from IMU prediction
-                    {
-                         const double beta_relative_yaw =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_relative_yaw *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_relative_yaw =
-                             CT_ICP::RelativeYawFunctor::Create(yawFromQuaternion(predicted_scan_delta),
-                                                                beta_relative_yaw);
-                         problem.AddResidualBlock(cost_relative_yaw, nullptr,
-                                                  &begin_quat.x(), &end_quat.x());
-                    }
-
-                    if (options_.beta_nonholonomic > 0.) // ground vehicle lateral/vertical motion prior
-                    {
-                         const double beta_nonholonomic =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_nonholonomic *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_nonholonomic =
-                             CT_ICP::NonHolonomicMotionFunctor::Create(beta_nonholonomic);
-                         problem.AddResidualBlock(cost_nonholonomic, nullptr,
-                                                  &begin_t.x(), &begin_quat.x(), &end_t.x());
-                    }
-
-                    if (options_.beta_frame_nonholonomic > 0. && previous_state != nullptr)
-                    {
-                         const double beta_frame_nonholonomic =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_frame_nonholonomic *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_frame_nonholonomic =
-                             CT_ICP::FrameNonHolonomicFunctor::Create(previous_translation,
-                                                                      previous_orientation,
-                                                                      beta_frame_nonholonomic);
-                         problem.AddResidualBlock(cost_frame_nonholonomic, nullptr, &end_t.x());
-                    }
-
-                    if (options_.beta_world_z_consistency > 0. && previous_state != nullptr)
-                    {
-                         const double beta_world_z_consistency =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_world_z_consistency *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_world_z_consistency =
-                             CT_ICP::WorldZConsistencyFunctor::Create(previous_translation.z(),
-                                                                     beta_world_z_consistency);
-                         problem.AddResidualBlock(cost_world_z_consistency, nullptr, &end_t.x());
-                    }
-
-                    if (options_.beta_world_z_reference > 0. && previous_state != nullptr)
-                    {
-                         world_z_reference_ =
-                             do_ct_lio::UpdateOneShotScalarReference(world_z_reference_,
-                                                                     previous_translation.z());
-                         if (world_z_reference_.valid)
-                         {
-                              const double beta_world_z_reference =
-                                  do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                                   options_.beta_world_z_reference *
-                                                                       degeneracy_prior_boost);
-                              auto *cost_world_z_reference =
-                                  CT_ICP::WorldZConsistencyFunctor::Create(world_z_reference_.value,
-                                                                           beta_world_z_reference);
-                              problem.AddResidualBlock(cost_world_z_reference, nullptr, &end_t.x());
-                         }
-                    }
-
-                    if (command_motion_enabled &&
-                        command_delta.valid &&
-                        command_delta.samples_used >= options_.command_motion_min_samples)
-                    {
-                         const double beta_command_translation =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_command_translation *
-                                                                  degeneracy_prior_boost);
-                         const double beta_command_lateral =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_command_lateral *
-                                                                  degeneracy_prior_boost);
-                         const double beta_command_yaw =
-                             do_ct_lio::MakeMotionPriorWeight(surf_num,
-                                                              options_.beta_command_yaw *
-                                                                  degeneracy_prior_boost);
-                         auto *cost_command_motion =
-                             CT_ICP::CommandMotionFunctor::Create(command_delta.forward,
-                                                                  command_delta.yaw,
-                                                                  beta_command_translation,
-                                                                  beta_command_lateral,
-                                                                  beta_command_yaw);
-                         problem.AddResidualBlock(cost_command_motion, nullptr,
-                                                  &begin_t.x(), &begin_quat.x(),
-                                                  &end_t.x(), &end_quat.x());
-                    }
+                    // if (options_.beta_constant_velocity > 0.) //  const velocity
+                    // {
+                    //      CT_ICP::VelocityConsistencyFactor2 *cost_velocity_consistency =
+                    //          new CT_ICP::VelocityConsistencyFactor2(previous_velocity, sqrt(surf_num * options_.beta_constant_velocity * laser_point_cov));
+                    //      problem.AddResidualBlock(cost_velocity_consistency, nullptr, PR_begin, PR_end);
+                    // }
                }
 
                if (surf_num < options_.min_num_residuals)
@@ -991,11 +508,6 @@ namespace zjloc
 
                ceres::Solver::Summary summary;
 
-               const Eigen::Vector3d begin_t_before_solve = begin_t;
-               const Eigen::Quaterniond begin_quat_before_solve = begin_quat.normalized();
-               const Eigen::Vector3d end_t_before_solve = end_t;
-               const Eigen::Quaterniond end_quat_before_solve = end_quat.normalized();
-
                ceres::Solve(options, &problem, &summary);
 
                if (!summary.IsSolutionUsable())
@@ -1006,34 +518,6 @@ namespace zjloc
 
                begin_quat.normalize();
                end_quat.normalize();
-
-               if (do_ct_projection_valid_)
-               {
-                    do_ct_lio::Vector12d raw_delta = do_ct_lio::Vector12d::Zero();
-                    raw_delta.segment<3>(0) = begin_t - begin_t_before_solve;
-                    raw_delta.segment<3>(3) =
-                        localRotationDelta(begin_quat_before_solve, begin_quat);
-                    raw_delta.segment<3>(6) = end_t - end_t_before_solve;
-                    raw_delta.segment<3>(9) =
-                        localRotationDelta(end_quat_before_solve, end_quat);
-
-                    const do_ct_lio::Vector12d projected_delta =
-                        do_ct_lio::BlendProjectedRawDelta(raw_delta,
-                                                          do_ct_projection_scale_,
-                                                          do_ct_projection_eigenvectors_,
-                                                          do_ct_projection_gates_,
-                                                          options_.degeneracy_aware.projection_strength);
-
-                    if (projected_delta.allFinite())
-                    {
-                         begin_t = begin_t_before_solve + projected_delta.segment<3>(0);
-                         begin_quat = applyLocalRotationDelta(begin_quat_before_solve,
-                                                              projected_delta.segment<3>(3));
-                         end_t = end_t_before_solve + projected_delta.segment<3>(6);
-                         end_quat = applyLocalRotationDelta(end_quat_before_solve,
-                                                            projected_delta.segment<3>(9));
-                    }
-               }
 
                double diff_trans = 0, diff_rot = 0;
                diff_trans += (current_state->translation_begin - begin_t).norm();
@@ -1080,441 +564,6 @@ namespace zjloc
 
           //   transpose point before added
           transformKeypoints(p_frame->point_surf);
-     }
-
-     double lidarodom::applyDegeneracyAwareResiduals(std::vector<ceres::CostFunction *> &surf,
-                                                     std::vector<DoCtPlaneResidual> &candidates,
-                                                     const Eigen::Vector3d &begin_t,
-                                                     const Eigen::Quaterniond &begin_quat,
-                                                     const Eigen::Vector3d &end_t,
-                                                     const Eigen::Quaterniond &end_quat,
-                                                     int frame_id,
-                                                     int iteration)
-     {
-          const auto &da = options_.degeneracy_aware;
-          do_ct_projection_valid_ = false;
-          auto add_candidate_cost = [&](const DoCtPlaneResidual &candidate, double factor_weight)
-          {
-               CT_ICP::CTLidarPlaneNormFactor *cost_function =
-                   new CT_ICP::CTLidarPlaneNormFactor(candidate.raw_point,
-                                                      candidate.normal,
-                                                      candidate.norm_offset,
-                                                      candidate.alpha_time,
-                                                      factor_weight);
-               surf.push_back(cost_function);
-          };
-
-          if (!da.enable || options_.icpmodel != IcpModel::CT_POINT_TO_PLANE || candidates.empty())
-          {
-               for (const auto &candidate : candidates)
-                    add_candidate_cost(candidate, candidate.local_factor_weight);
-               return 1.0;
-          }
-
-          Eigen::Vector3d begin_t_eval = begin_t;
-          Eigen::Quaterniond begin_quat_eval = begin_quat;
-          Eigen::Vector3d end_t_eval = end_t;
-          Eigen::Quaterniond end_quat_eval = end_quat;
-
-          ceres::Problem diagnostic_problem;
-          diagnostic_problem.AddParameterBlock(&begin_quat_eval.x(), 4, new RotationParameterization());
-          diagnostic_problem.AddParameterBlock(&end_quat_eval.x(), 4, new RotationParameterization());
-          diagnostic_problem.AddParameterBlock(&begin_t_eval.x(), 3);
-          diagnostic_problem.AddParameterBlock(&end_t_eval.x(), 3);
-
-          for (const auto &candidate : candidates)
-          {
-               auto *cost_function =
-                   new CT_ICP::CTLidarPlaneNormFactor(candidate.raw_point,
-                                                      candidate.normal,
-                                                      candidate.norm_offset,
-                                                      candidate.alpha_time,
-                                                      candidate.local_factor_weight);
-               diagnostic_problem.AddResidualBlock(cost_function, nullptr,
-                                                   &begin_t_eval.x(), &begin_quat_eval.x(),
-                                                   &end_t_eval.x(), &end_quat_eval.x());
-          }
-
-          std::vector<double *> parameter_blocks = {
-              &begin_t_eval.x(), &begin_quat_eval.x(), &end_t_eval.x(), &end_quat_eval.x()};
-          ceres::Problem::EvaluateOptions evaluate_options;
-          evaluate_options.parameter_blocks = parameter_blocks;
-          evaluate_options.apply_loss_function = false;
-
-          std::vector<double> residuals;
-          ceres::CRSMatrix jacobian_crs;
-          double cost = 0.0;
-          if (!diagnostic_problem.Evaluate(evaluate_options, &cost, &residuals, nullptr, &jacobian_crs) ||
-              jacobian_crs.num_cols != 12 ||
-              static_cast<size_t>(jacobian_crs.num_rows) != candidates.size())
-          {
-               LOG(WARNING) << "DO-CT-LIO degeneracy-aware Evaluate failed; falling back to local weights";
-               for (const auto &candidate : candidates)
-                    add_candidate_cost(candidate, candidate.local_factor_weight);
-               return 1.0;
-          }
-
-          const Eigen::MatrixXd dense_jacobian = denseFromCrs(jacobian_crs);
-          const do_ct_lio::Matrix12d raw_hessian =
-              dense_jacobian.transpose() * dense_jacobian;
-
-          double rotation_scale = da.rotation_scale;
-          if (da.rotation_scale_mode == "adaptive")
-          {
-               std::vector<double> point_ranges;
-               point_ranges.reserve(candidates.size());
-               for (const auto &candidate : candidates)
-                    point_ranges.push_back(candidate.raw_point.norm());
-               const size_t median_index = point_ranges.size() / 2;
-               std::nth_element(point_ranges.begin(), point_ranges.begin() + median_index, point_ranges.end());
-               rotation_scale = point_ranges[median_index];
-          }
-          rotation_scale = std::max(da.rotation_scale_min,
-                                    std::min(da.rotation_scale_max, rotation_scale));
-          if (!std::isfinite(rotation_scale) || rotation_scale <= 0.0)
-               rotation_scale = std::max(1.0, da.rotation_scale);
-
-          const do_ct_lio::Vector12d scale =
-              do_ct_lio::MakePoseIncrementScale(rotation_scale);
-          const do_ct_lio::Matrix12d scaled_hessian =
-              do_ct_lio::ScaleHessianRawToScaled(raw_hessian, scale);
-
-          Eigen::SelfAdjointEigenSolver<do_ct_lio::Matrix12d> solver(scaled_hessian);
-          if (solver.info() != Eigen::Success)
-          {
-               LOG(WARNING) << "DO-CT-LIO degeneracy-aware eigensolve failed; falling back to local weights";
-               for (const auto &candidate : candidates)
-                    add_candidate_cost(candidate, candidate.local_factor_weight);
-               return 1.0;
-          }
-
-          const do_ct_lio::Vector12d scaled_eigenvalues = solver.eigenvalues();
-          const do_ct_lio::Matrix12d scaled_eigenvectors = solver.eigenvectors();
-          const do_ct_lio::Vector12d normalized_eigenvalues =
-              do_ct_lio::NormalizeEigenvaluesByAverageEnergy(scaled_eigenvalues);
-          const do_ct_lio::Vector12d gates =
-              do_ct_lio::ComputeObservabilityGates(scaled_eigenvalues, da.lambda0);
-          const auto spectrum = do_ct_lio::ClassifySpectrum(normalized_eigenvalues,
-                                                            da.effective_rank_threshold,
-                                                            options_.do_ct_diagnostics.relative_eigen_floor);
-          const double min_normalized_eigenvalue = normalized_eigenvalues.minCoeff();
-          const double max_normalized_eigenvalue = normalized_eigenvalues.maxCoeff();
-          const double min_gate = gates.minCoeff();
-          const bool degeneracy_detected =
-              do_ct_lio::IsDegenerateSpectrum(min_normalized_eigenvalue,
-                                               da.degeneracy_threshold,
-                                               spectrum.effective_rank,
-                                               da.effective_rank_threshold);
-
-          do_ct_projection_degenerate_ = degeneracy_detected;
-          do_ct_projection_min_gate_ = min_gate;
-          do_ct_projection_scale_ = scale;
-          do_ct_projection_gates_ = gates;
-          do_ct_projection_eigenvectors_ = scaled_eigenvectors;
-          do_ct_projection_valid_ =
-              da.post_solve_projection &&
-              degeneracy_detected &&
-              da.projection_strength > 0.0 &&
-              min_gate < da.projection_min_gate_threshold;
-
-          double prior_boost = 1.0;
-          if (degeneracy_detected)
-          {
-               prior_boost = 1.0 + da.prior_boost * (1.0 - min_gate);
-               prior_boost = std::max(1.0, std::min(da.prior_boost_max, prior_boost));
-          }
-
-          Eigen::DiagonalMatrix<double, 12> scale_matrix(scale);
-          std::vector<do_ct_lio::ResidualSelectionItem> selection_items;
-          selection_items.reserve(candidates.size());
-          std::set<std::string> bucket_keys;
-          double min_quality = std::numeric_limits<double>::infinity();
-          double max_quality = 0.0;
-          double quality_sum = 0.0;
-
-          const double safe_bucket_size = std::max(da.bucket_size, 1.0e-6);
-          const int safe_time_bucket_count = std::max(1, da.time_bucket_count);
-          const double max_delta = std::max(0.0, da.max_weight_delta);
-
-          for (size_t i = 0; i < candidates.size(); ++i)
-          {
-               auto &candidate = candidates[i];
-               const do_ct_lio::RowVector12d scaled_row =
-                   dense_jacobian.row(static_cast<int>(i)) * scale_matrix;
-               candidate.hessian_quality =
-                   do_ct_lio::ComputeDirectionalQuality(scaled_row,
-                                                        scaled_eigenvectors,
-                                                        gates,
-                                                        da.jacobian_norm_min);
-               candidate.final_info_weight =
-                   do_ct_lio::ComputeFinalInformationWeight(candidate.local_info_weight,
-                                                            candidate.hessian_quality,
-                                                            da.gamma,
-                                                            da.omega_min,
-                                                            da.omega_max);
-               if (max_delta > 0.0)
-               {
-                    const double lower =
-                        std::max(da.omega_min, candidate.local_info_weight * (1.0 - max_delta));
-                    const double upper =
-                        std::min(da.omega_max, candidate.local_info_weight * (1.0 + max_delta));
-                    if (lower <= upper)
-                         candidate.final_info_weight =
-                             std::max(lower, std::min(upper, candidate.final_info_weight));
-               }
-               candidate.final_factor_weight = std::sqrt(std::max(0.0, candidate.final_info_weight));
-
-               candidate.spatial_bucket_x =
-                   static_cast<int>(std::floor(candidate.world_point.x() / safe_bucket_size));
-               candidate.spatial_bucket_y =
-                   static_cast<int>(std::floor(candidate.world_point.y() / safe_bucket_size));
-               candidate.spatial_bucket_z =
-                   static_cast<int>(std::floor(candidate.world_point.z() / safe_bucket_size));
-               candidate.time_bucket =
-                   std::max(0, std::min(safe_time_bucket_count - 1,
-                                        static_cast<int>(std::floor(candidate.alpha_time * safe_time_bucket_count))));
-
-               std::ostringstream key;
-               key << candidate.spatial_bucket_x << ":" << candidate.spatial_bucket_y << ":"
-                   << candidate.spatial_bucket_z << ":" << candidate.time_bucket;
-               const std::string bucket_key = key.str();
-               bucket_keys.insert(bucket_key);
-               selection_items.push_back({bucket_key, candidate.final_info_weight});
-
-               min_quality = std::min(min_quality, candidate.hessian_quality);
-               max_quality = std::max(max_quality, candidate.hessian_quality);
-               quality_sum += candidate.hessian_quality;
-          }
-
-          const int target_min =
-              std::min(static_cast<int>(candidates.size()),
-                       std::max(options_.min_num_residuals, da.min_candidates));
-          const int target_max =
-              options_.max_num_residuals > 0
-                  ? std::min(static_cast<int>(candidates.size()), options_.max_num_residuals)
-                  : static_cast<int>(candidates.size());
-          const std::vector<int> selected_indices =
-              do_ct_lio::SelectBalancedResidualIndices(selection_items,
-                                                       da.bucket_top_k,
-                                                       target_min,
-                                                       target_max);
-          for (int index : selected_indices)
-               add_candidate_cost(candidates[index], candidates[index].final_factor_weight);
-
-          const int log_every = std::max(1, options_.do_ct_diagnostics.log_every_n_frames);
-          const bool should_log =
-              da.log_diagnostics &&
-              (frame_id <= 3 || frame_id % log_every == 0) &&
-              iteration == 0;
-          if (should_log)
-          {
-               if (!degeneracy_aware_log_.is_open())
-               {
-                    degeneracy_aware_log_.open(da.log_path, std::ios::out | std::ios::trunc);
-               }
-               if (degeneracy_aware_log_.is_open())
-               {
-                    if (!degeneracy_aware_header_written_)
-                    {
-                         degeneracy_aware_log_
-                             << "frame,iteration,candidates,selected,buckets,rotation_scale,cost,"
-                             << "effective_rank,effective_rank_threshold,degeneracy_detected,"
-                             << "min_normalized_eigenvalue,max_normalized_eigenvalue,min_gate,"
-                             << "prior_boost,min_quality,mean_quality,max_quality,"
-                             << "normalized_eigenvalues,observability_gates\n";
-                         degeneracy_aware_header_written_ = true;
-                    }
-                    const double mean_quality =
-                        candidates.empty() ? 0.0 : quality_sum / static_cast<double>(candidates.size());
-                    degeneracy_aware_log_ << frame_id << ","
-                                          << iteration << ","
-                                          << candidates.size() << ","
-                                          << selected_indices.size() << ","
-                                          << bucket_keys.size() << ","
-                                          << std::setprecision(12) << rotation_scale << ","
-                                          << cost << ","
-                                          << spectrum.effective_rank << ","
-                                          << da.effective_rank_threshold << ","
-                                          << (degeneracy_detected ? 1 : 0) << ","
-                                          << min_normalized_eigenvalue << ","
-                                          << max_normalized_eigenvalue << ","
-                                          << min_gate << ","
-                                          << prior_boost << ","
-                                          << min_quality << ","
-                                          << mean_quality << ","
-                                          << max_quality << ",\""
-                                          << do_ct_lio::FormatVector12Csv(normalized_eigenvalues) << "\",\""
-                                          << do_ct_lio::FormatVector12Csv(gates) << "\"\n";
-                    degeneracy_aware_log_.flush();
-               }
-          }
-
-          return prior_boost;
-     }
-
-     void lidarodom::logDoCtHessianDiagnostics(ceres::Problem &problem,
-                                               const std::vector<double *> &parameter_blocks,
-                                               int frame_id,
-                                               int iteration,
-                                               int surf_num)
-     {
-          const auto &do_ct = options_.do_ct_diagnostics;
-          if (!do_ct.enabled)
-               return;
-          if (!do_ct.logging_only)
-          {
-               LOG(WARNING) << "DO-CT-LIO hessian_12d logging_only=false is not allowed in this stage";
-               return;
-          }
-          if (do_ct.log_first_iteration_only && iteration != 0)
-               return;
-          const int log_every = std::max(1, do_ct.log_every_n_frames);
-          if (frame_id > 3 && frame_id % log_every != 0)
-               return;
-          if (parameter_blocks.size() != 4)
-               return;
-
-          ceres::Problem::EvaluateOptions evaluate_options;
-          evaluate_options.parameter_blocks = parameter_blocks;
-          evaluate_options.apply_loss_function = false;
-
-          std::vector<double> residuals;
-          ceres::CRSMatrix jacobian_crs;
-          double cost = 0.0;
-          if (!problem.Evaluate(evaluate_options, &cost, &residuals, nullptr, &jacobian_crs))
-          {
-               LOG(WARNING) << "DO-CT-LIO diagnostic Problem::Evaluate failed";
-               return;
-          }
-          if (jacobian_crs.num_cols != 12)
-          {
-               LOG(WARNING) << "DO-CT-LIO expected a 12D local Jacobian but got "
-                            << jacobian_crs.num_cols << " columns";
-               return;
-          }
-
-          const Eigen::MatrixXd dense_jacobian = denseFromCrs(jacobian_crs);
-          const do_ct_lio::Matrix12d raw_hessian =
-              dense_jacobian.transpose() * dense_jacobian;
-          const do_ct_lio::Vector12d scale =
-              do_ct_lio::MakePoseIncrementScale(do_ct.rotation_scale_meters);
-          const do_ct_lio::Matrix12d scaled_hessian =
-              do_ct_lio::ScaleHessianRawToScaled(raw_hessian, scale);
-
-          Eigen::SelfAdjointEigenSolver<do_ct_lio::Matrix12d> raw_solver(raw_hessian);
-          Eigen::SelfAdjointEigenSolver<do_ct_lio::Matrix12d> scaled_solver(scaled_hessian);
-          if (raw_solver.info() != Eigen::Success || scaled_solver.info() != Eigen::Success)
-          {
-               LOG(WARNING) << "DO-CT-LIO hessian eigensolve failed";
-               return;
-          }
-
-          const do_ct_lio::Vector12d raw_eigenvalues = raw_solver.eigenvalues();
-          const do_ct_lio::Vector12d scaled_eigenvalues = scaled_solver.eigenvalues();
-          const auto spectrum = do_ct_lio::ClassifySpectrum(scaled_eigenvalues,
-                                                            do_ct.effective_rank_threshold,
-                                                            do_ct.relative_eigen_floor);
-
-          double fd_max_abs = -1.0;
-          double fd_rms = -1.0;
-          double fd_max_relative = -1.0;
-          double fd_relative_rms = -1.0;
-          int fd_columns = 0;
-          if (do_ct.finite_difference_enabled && do_ct.finite_difference_epsilon > 0.0)
-          {
-               const int max_columns =
-                   std::max(0, std::min(12, do_ct.finite_difference_max_columns));
-               const auto backup = backupParameterBlocks(parameter_blocks);
-               double squared_error_sum = 0.0;
-               double squared_relative_error_sum = 0.0;
-               int error_count = 0;
-
-               for (int column = 0; column < max_columns; ++column)
-               {
-                    std::vector<double> residuals_plus;
-                    std::vector<double> residuals_minus;
-
-                    restoreParameterBlocks(parameter_blocks, backup);
-                    applyLocalPerturbation(parameter_blocks, column, do_ct.finite_difference_epsilon);
-                    problem.Evaluate(evaluate_options, nullptr, &residuals_plus, nullptr, nullptr);
-
-                    restoreParameterBlocks(parameter_blocks, backup);
-                    applyLocalPerturbation(parameter_blocks, column, -do_ct.finite_difference_epsilon);
-                    problem.Evaluate(evaluate_options, nullptr, &residuals_minus, nullptr, nullptr);
-
-                    if (residuals_plus.size() == residuals.size() &&
-                        residuals_minus.size() == residuals.size())
-                    {
-                         for (size_t row = 0; row < residuals.size(); ++row)
-                         {
-                              const double fd =
-                                  (residuals_plus[row] - residuals_minus[row]) /
-                                  (2.0 * do_ct.finite_difference_epsilon);
-                              const double analytic = dense_jacobian(static_cast<int>(row), column);
-                              const double err = fd - analytic;
-                              const double relative_denominator =
-                                  std::max(1.0, std::max(std::abs(fd), std::abs(analytic)));
-                              const double relative_err = std::abs(err) / relative_denominator;
-                              fd_max_abs = std::max(fd_max_abs, std::abs(err));
-                              fd_max_relative = std::max(fd_max_relative, relative_err);
-                              squared_error_sum += err * err;
-                              squared_relative_error_sum += relative_err * relative_err;
-                              ++error_count;
-                         }
-                         ++fd_columns;
-                    }
-               }
-
-               restoreParameterBlocks(parameter_blocks, backup);
-               if (error_count > 0)
-               {
-                    fd_rms = std::sqrt(squared_error_sum / static_cast<double>(error_count));
-                    fd_relative_rms = std::sqrt(squared_relative_error_sum / static_cast<double>(error_count));
-               }
-          }
-
-          if (!do_ct_diagnostics_log_.is_open())
-          {
-               do_ct_diagnostics_log_.open(do_ct.log_path, std::ios::out | std::ios::trunc);
-               if (!do_ct_diagnostics_log_.is_open())
-               {
-                    LOG(WARNING) << "Failed to open DO-CT-LIO diagnostics log: " << do_ct.log_path;
-                    return;
-               }
-          }
-
-          if (!do_ct_diagnostics_header_written_)
-          {
-               do_ct_diagnostics_log_
-                   << "frame,iteration,surf_num,residual_count,cost,effective_rank,"
-                   << "effective_rank_threshold,rank_pass,relative_eigen_floor,"
-                   << "rotation_scale_meters,min_scaled_eigenvalue,max_scaled_eigenvalue,"
-                   << "fd_columns,fd_max_abs,fd_rms,fd_max_relative,fd_relative_rms,"
-                   << "raw_eigenvalues,scaled_eigenvalues,scale\n";
-               do_ct_diagnostics_header_written_ = true;
-          }
-
-          do_ct_diagnostics_log_ << frame_id << ","
-                                 << iteration << ","
-                                 << surf_num << ","
-                                 << residuals.size() << ","
-                                 << std::setprecision(12) << cost << ","
-                                 << spectrum.effective_rank << ","
-                                 << spectrum.configured_min_rank << ","
-                                 << (spectrum.rank_pass ? 1 : 0) << ","
-                                 << do_ct.relative_eigen_floor << ","
-                                 << do_ct.rotation_scale_meters << ","
-                                 << spectrum.min_eigenvalue << ","
-                                 << spectrum.max_eigenvalue << ","
-                                 << fd_columns << ","
-                                 << fd_max_abs << ","
-                                 << fd_rms << ","
-                                 << fd_max_relative << ","
-                                 << fd_relative_rms << ",\""
-                                 << do_ct_lio::FormatVector12Csv(raw_eigenvalues) << "\",\""
-                                 << do_ct_lio::FormatVector12Csv(scaled_eigenvalues) << "\",\""
-                                 << do_ct_lio::FormatVector12Csv(scale) << "\"\n";
-          do_ct_diagnostics_log_.flush();
      }
 
      double lidarodom::checkLocalizability(std::vector<Eigen::Vector3d> planeNormals)
@@ -1588,9 +637,7 @@ namespace zjloc
      }
 
      void lidarodom::addSurfCostFactor(std::vector<ceres::CostFunction *> &surf, std::vector<Eigen::Vector3d> &normals,
-                                       std::vector<point3D> &keypoints, const cloudFrame *p_frame,
-                                       std::vector<DoCtPlaneResidual> *do_ct_plane_residuals,
-                                       bool defer_cost_creation)
+                                       std::vector<point3D> &keypoints, const cloudFrame *p_frame)
      {
 
           auto estimatePointNeighborhood = [&](std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> &vector_neighbors,
@@ -1624,12 +671,6 @@ namespace zjloc
 
           size_t num = keypoints.size();
           int num_residuals = 0;
-          const int candidate_limit =
-              defer_cost_creation
-                  ? std::max(options_.max_num_residuals,
-                             options_.max_num_residuals *
-                                 std::max(1, options_.degeneracy_aware.max_candidate_multiplier))
-                  : options_.max_num_residuals;
 
           for (int k = 0; k < num; k++)
           {
@@ -1680,27 +721,6 @@ namespace zjloc
 
                          double norm_offset = -norm_vector.dot(vector_neighbors[i]);
 
-                         if (do_ct_plane_residuals != nullptr)
-                         {
-                              DoCtPlaneResidual residual;
-                              residual.raw_point = keypoints[k].raw_point;
-                              residual.world_point = keypoints[k].point;
-                              residual.reference_point = vector_neighbors[i];
-                              residual.normal = norm_vector;
-                              residual.norm_offset = norm_offset;
-                              residual.alpha_time = keypoints[k].alpha_time;
-                              residual.local_factor_weight = weight;
-                              residual.local_info_weight = weight * weight;
-                              residual.point_to_plane_distance = point_to_plane_dist;
-                              residual.final_info_weight = residual.local_info_weight;
-                              residual.final_factor_weight = residual.local_factor_weight;
-                              residual.source_index = k;
-                              do_ct_plane_residuals->push_back(residual);
-                         }
-
-                         if (defer_cost_creation)
-                              continue;
-
                          switch (options_.icpmodel)
                          {
                          case IcpModel::CT_POINT_TO_PLANE:
@@ -1738,7 +758,7 @@ namespace zjloc
                     }
                }
 
-               if (candidate_limit > 0 && num_residuals >= candidate_limit)
+               if (num_residuals >= options_.max_num_residuals)
                     break;
           }
      }
@@ -1840,14 +860,6 @@ namespace zjloc
           if (search != map.end())
           {
                auto &voxel_block = (search.value());
-               const int frame_id = p_frame != nullptr ? p_frame->frame_id : -1;
-
-               if (voxel_block.IsStale(frame_id, options_.map_max_frame_age))
-               {
-                    voxel_block.ResetWithPoint(point, frame_id);
-                    addPointToPcl(points_world, point, intensity, p_frame);
-                    return;
-               }
 
                if (!voxel_block.IsFull())
                {
@@ -1865,7 +877,7 @@ namespace zjloc
                     {
                          if (min_num_points <= 0 || voxel_block.NumPoints() >= min_num_points)
                          {
-                              voxel_block.AddPoint(point, frame_id);
+                              voxel_block.AddPoint(point);
                               // addPointToPcl(points_world, point, intensity, p_frame);
                          }
                     }
@@ -1875,9 +887,8 @@ namespace zjloc
           {
                if (min_num_points <= 0)
                {
-                    const int frame_id = p_frame != nullptr ? p_frame->frame_id : -1;
                     voxelBlock block(max_num_points_in_voxel);
-                    block.AddPoint(point, frame_id);
+                    block.AddPoint(point);
                     map[voxel(kx, ky, kz)] = std::move(block);
                }
           }
@@ -1921,8 +932,7 @@ namespace zjloc
           for (auto &pair : voxel_map)
           {
                Eigen::Vector3d pt = pair.second.points[0];
-               if ((pt - location).squaredNorm() > (options_.max_distance * options_.max_distance) ||
-                   pair.second.IsStale(index_frame, options_.map_max_frame_age))
+               if ((pt - location).squaredNorm() > (options_.max_distance * options_.max_distance))
                {
                     voxels_to_erase.push_back(pair.first);
                }

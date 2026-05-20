@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_NAME="${IMAGE_NAME:-do-ct-lio-noetic:local}"
+IMAGE_NAME="${IMAGE_NAME:-ct-lio-noetic:local}"
 USER_NAME="${USER:-ubuntu20}"
 USER_UID="$(id -u)"
 USER_GID="$(id -g)"

@@ -5,8 +5,6 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
-#include <livox_ros_driver2/CustomMsg.h>
-
 #include "tools/point_types.h"
 #include "common/cloudMap.hpp"
 
@@ -47,7 +45,6 @@ namespace zjloc
          * @param pcl_out
          */
         void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, std::vector<point3D> &pcl_out);
-        void Process(const livox_ros_driver2::CustomMsg::ConstPtr &msg, std::vector<point3D> &pcl_out);
         // void Process(const sensor_msgs::PointCloud2::ConstPtr &msg, FullCloudPtr &pcl_out);
 
         /// 从YAML中读取参数
@@ -55,12 +52,10 @@ namespace zjloc
 
         //  返回激光的时间
         double getTimeSpan() { return timespan_; }
-        bool lidarHeaderStampIsEnd() const { return lidar_header_stamp_is_end_; }
 
         LidarType lidar_type_ = LidarType::VELO32; // 雷达类型
 
     private:
-        void AviaHandler(const livox_ros_driver2::CustomMsg::ConstPtr &msg);
         void Oust64Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
         void VelodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
         void RobosenseHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
@@ -70,11 +65,8 @@ namespace zjloc
         std::vector<point3D> cloud_full_, cloud_out_; //  输出点云
 
         int point_filter_num_ = 1; // 跳点
-        int scan_line_ = 128;
         double blind = 0.1;
-        double max_range_ = 150.0;
 
         double timespan_;
-        bool lidar_header_stamp_is_end_ = false;
     };
 } // namespace zjloc

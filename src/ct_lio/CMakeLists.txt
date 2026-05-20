@@ -20,7 +20,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fexceptions")
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
-  livox_ros_driver2
   nav_msgs
   sensor_msgs
   roscpp
@@ -37,7 +36,7 @@ add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
 
 
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs livox_ros_driver2 nav_msgs roscpp rospy sensor_msgs std_msgs
+  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs
   DEPENDS EIGEN3 PCL Ceres 
   INCLUDE_DIRS include
 )
